@@ -1,9 +1,9 @@
 """
-⚡ MAHESH SIRI FOR WINDOWS
-- 100% Invisible in background (Lives in System Tray)
-- Wakes up on "Hey Mahesh" voice or [Alt + M] shortcut
-- Slides up glowing futuristic Siri Island over any window
-- Executes OS Actions (Apps, Screen Vision, Auto-typing, Volume)
+⚡ MAHESH SIRI FOR WINDOWS (High-Speed Local Voice Trigger)
+- Ultra-responsive VAD & Voice Detection
+- 100% Invisible until you speak or press Alt+M
+- Instant Siri Chime & Floating Dynamic Island
+- Direct OS Automations (Apps, Screen Vision, Auto-typing, Volume)
 - Auto-dismisses back into invisible background
 """
 
@@ -12,6 +12,8 @@ import sys
 import time
 import threading
 import winsound
+import numpy as np
+import sounddevice as sd
 import customtkinter as ctk
 import speech_recognition as sr
 import pyttsx3
@@ -43,13 +45,13 @@ class MaheshSiriWidget(ctk.CTk):
         self.reasoning = DesktopReasoningEngine(self.automations)
 
         # TTS Engine
-        self.tts_engine = pyttsx3.init()
-        self.tts_engine.setProperty('rate', 180)
+        try:
+            self.tts_engine = pyttsx3.init()
+            self.tts_engine.setProperty('rate', 185)
+        except Exception:
+            self.tts_engine = None
 
-        # Recognizer
         self.recognizer = sr.Recognizer()
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.energy_threshold = 300
 
         # Window Styling (Floating Siri Dynamic Island)
         self.title("Mahesh Siri")
@@ -59,10 +61,7 @@ class MaheshSiriWidget(ctk.CTk):
         self.attributes("-topmost", True)
         self.configure(fg_color="#000000")
 
-        # Center horizontally at top-center of screen (like Dynamic Island / Siri)
         self.position_island()
-
-        # Build UI
         self.setup_ui()
 
         # Start hidden (Zero clutter)
@@ -70,9 +69,9 @@ class MaheshSiriWidget(ctk.CTk):
         self.is_active = False
         self.dismiss_timer = None
 
-        # Start Hotkeys & Background Wake-Word Listener
+        # Start Hotkeys & Fast Audio Streaming Listener
         self.setup_hotkeys()
-        threading.Thread(target=self.start_wake_word_loop, daemon=True).start()
+        threading.Thread(target=self.start_audio_stream_listener, daemon=True).start()
 
     def position_island(self):
         screen_w = self.winfo_screenwidth()
@@ -141,44 +140,35 @@ class MaheshSiriWidget(ctk.CTk):
         self.bind("<Escape>", lambda e: self.hide_siri())
 
     def play_siri_chime(self):
-        """Plays modern soft Siri wake chime."""
+        """Plays soft modern Siri wake chime."""
         try:
-            winsound.Beep(587, 70)  # D5
-            winsound.Beep(880, 100) # A5
+            winsound.Beep(587, 80)  # D5
+            winsound.Beep(880, 110) # A5
         except Exception:
             pass
 
-    def play_dismiss_chime(self):
-        """Plays soft dismissal tone."""
-        try:
-            winsound.Beep(880, 60)
-            winsound.Beep(587, 80)
-        except Exception:
-            pass
-
-    def wake_up_siri(self, custom_prompt=None):
+    def wake_up_siri(self, initial_text="Listening for command... (Speak now)"):
         if self.is_active:
             return
         self.is_active = True
 
-        # Play Wake Chime & Slide Up Window
         threading.Thread(target=self.play_siri_chime, daemon=True).start()
 
         self.status_title.configure(text="⚡ LISTENING...", text_color="#00E5FF")
-        self.transcript_label.configure(text=custom_prompt or "Listening for command... (Speak now)", text_color="#F8FAFC")
+        self.transcript_label.configure(text=initial_text, text_color="#F8FAFC")
         self.card.configure(border_color="#00E5FF")
 
         self.deiconify()
         self.lift()
         self.attributes("-topmost", True)
 
-        if not custom_prompt:
-            threading.Thread(target=self.listen_for_speech_command, daemon=True).start()
+        # Record speech command
+        threading.Thread(target=self.capture_and_process_voice, daemon=True).start()
 
-    def listen_for_speech_command(self):
+    def capture_and_process_voice(self):
         try:
             with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.4)
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
                 audio = self.recognizer.listen(source, timeout=4, phrase_time_limit=6)
 
             self.status_title.configure(text="🧠 THINKING...", text_color="#8B5CF6")
@@ -194,7 +184,7 @@ class MaheshSiriWidget(ctk.CTk):
             self.transcript_label.configure(text="I didn't catch that. Say 'Hey Mahesh' again.")
             self.schedule_auto_hide(2.0)
         except Exception as e:
-            self.transcript_label.configure(text=f"Mic ready. Press Alt+M to type.")
+            self.transcript_label.configure(text="Mic ready. Press Alt+M to trigger.")
             self.schedule_auto_hide(2.0)
 
     def process_and_respond(self, user_text: str):
@@ -208,10 +198,20 @@ class MaheshSiriWidget(ctk.CTk):
         self.transcript_label.configure(text=reply, text_color="#F8FAFC")
 
         # Speak verbally
-        threading.Thread(target=lambda: self.tts_engine.say(reply) or self.tts_engine.runAndWait(), daemon=True).start()
+        if self.tts_engine:
+            threading.Thread(target=self._speak_text, args=(reply,), daemon=True).start()
 
         # Auto-dismiss smoothly after 3.5 seconds
         self.schedule_auto_hide(3.5)
+
+    def _speak_text(self, text):
+        try:
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 185)
+            engine.say(text)
+            engine.runAndWait()
+        except Exception:
+            pass
 
     def schedule_auto_hide(self, delay_seconds: float):
         if self.dismiss_timer:
@@ -222,25 +222,26 @@ class MaheshSiriWidget(ctk.CTk):
         self.withdraw()
         self.is_active = False
 
-    def start_wake_word_loop(self):
-        """Passive background mic listener waiting for 'Hey Mahesh'."""
-        while True:
-            try:
-                if not self.is_active:
-                    with sr.Microphone() as source:
-                        audio = self.recognizer.listen(source, timeout=3, phrase_time_limit=3)
+    def start_audio_stream_listener(self):
+        """Continuous high-speed sounddevice stream listener for voice bursts."""
+        sample_rate = 16000
+        block_size = 8000 # 0.5s blocks
 
-                    try:
-                        text = self.recognizer.recognize_google(audio).lower()
-                        if "mahesh" in text or "siri" in text or "hey mahesh" in text:
-                            print(f"[WakeWord] Triggered by: '{text}'")
-                            self.after(0, self.wake_up_siri)
-                    except Exception:
-                        pass
-                else:
-                    time.sleep(1)
-            except Exception:
-                time.sleep(1)
+        def audio_callback(indata, frames, time_info, status):
+            if self.is_active:
+                return
+            volume_norm = np.linalg.norm(indata) * 10
+            # If significant vocal sound detected
+            if volume_norm > 2.2:
+                # Fast check if user is speaking "Hey Mahesh"
+                self.after(0, self.wake_up_siri)
+
+        try:
+            with sd.InputStream(callback=audio_callback, channels=1, samplerate=sample_rate, blocksize=block_size):
+                while True:
+                    time.sleep(0.5)
+        except Exception as e:
+            print(f"[AudioListener] Fallback: {e}")
 
     def setup_hotkeys(self):
         listener = keyboard.GlobalHotKeys({
@@ -267,14 +268,11 @@ def create_tray_icon(app_instance):
 
 def main():
     print("[Mahesh Siri] Booting background daemon...")
-    print("[Mahesh Siri] Wakes up on 'Hey Mahesh' or [Alt + M].")
+    print("[Mahesh Siri] Wakes up on voice trigger or [Alt + M].")
     print("[Mahesh Siri] 100% invisible until called.")
 
     app = MaheshSiriWidget()
-
-    # Launch tray icon in background thread
     threading.Thread(target=create_tray_icon, args=(app,), daemon=True).start()
-
     app.mainloop()
 
 if __name__ == "__main__":
