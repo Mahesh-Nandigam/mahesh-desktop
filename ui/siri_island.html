@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ Mahesh Siri</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-glass: rgba(10, 11, 16, 0.94);
+            --cyan: #00E5FF;
+            --purple: #8B5CF6;
+            --green: #10B981;
+            --amber: #F59E0B;
+            --red: #EF4444;
+            --border: rgba(0, 229, 255, 0.35);
+            --text-main: #F8FAFC;
+            --text-sub: #94A3B8;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            user-select: none;
+        }
+
+        body {
+            background: #06070a;
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            padding-top: 30px;
+            overflow: hidden;
+        }
+
+        /* DYNAMIC ISLAND CONTAINER */
+        .siri-island {
+            width: 580px;
+            background: var(--bg-glass);
+            border: 2px solid var(--cyan);
+            border-radius: 28px;
+            padding: 16px 20px;
+            box-shadow: 0 0 45px rgba(0, 229, 255, 0.22), 0 25px 60px rgba(0,0,0,0.85);
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            position: relative;
+        }
+
+        .siri-island.active {
+            border-color: var(--purple);
+            box-shadow: 0 0 55px rgba(139, 92, 246, 0.35), 0 25px 60px rgba(0,0,0,0.85);
+        }
+
+        /* HEADER ROW */
+        .header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .logo-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .orb-glow {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            background: radial-gradient(circle, var(--cyan) 0%, var(--purple) 70%, transparent 100%);
+            box-shadow: 0 0 15px var(--cyan);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .orb-glow:hover {
+            transform: scale(1.1);
+        }
+
+        .orb-glow.recording {
+            background: radial-gradient(circle, var(--red) 0%, #B91C1C 70%, transparent 100%);
+            box-shadow: 0 0 20px var(--red);
+            animation: pulse 1s infinite alternate;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            100% { transform: scale(1.15); }
+        }
+
+        .title-text {
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            background: linear-gradient(135deg, var(--cyan), var(--purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* AUDIO WAVEFORM CANVAS */
+        .visualizer-canvas {
+            width: 140px;
+            height: 24px;
+            border-radius: 12px;
+        }
+
+        .status-badge {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--green);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .dot {
+            width: 7px;
+            height: 7px;
+            background: var(--green);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--green);
+        }
+
+        /* INPUT ROW */
+        .input-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(22, 24, 35, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 18px;
+            padding: 4px 6px 4px 14px;
+        }
+
+        input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #FFF;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        input::placeholder {
+            color: #64748B;
+        }
+
+        .btn-action {
+            background: linear-gradient(135deg, var(--cyan), var(--purple));
+            border: none;
+            border-radius: 14px;
+            color: #000;
+            font-size: 12px;
+            font-weight: 800;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .btn-action:hover {
+            transform: scale(1.04);
+            opacity: 0.95;
+        }
+
+        /* CHIPS ROW */
+        .chips-row {
+            display: flex;
+            gap: 6px;
+            overflow-x: auto;
+            scrollbar-width: none;
+        }
+
+        .chip {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 10px;
+            padding: 5px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-sub);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.15s;
+        }
+
+        .chip:hover {
+            border-color: var(--cyan);
+            color: var(--cyan);
+            background: rgba(0, 229, 255, 0.08);
+        }
+
+        /* RESPONSE / NOTIFICATION CARD */
+        .response-card {
+            background: #090a10;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 14px;
+            padding: 10px 14px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            color: #E2E8F0;
+            line-height: 1.5;
+            min-height: 38px;
+            display: flex;
+            align-items: center;
+        }
+
+        .response-card span {
+            color: var(--green);
+            font-weight: 700;
+            margin-right: 6px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="siri-island" id="siriIsland">
+        <!-- HEADER -->
+        <div class="header-row">
+            <div class="logo-group">
+                <div class="orb-glow" id="orbBtn" onclick="toggleVoice()">⚡</div>
+                <div class="title-text">MAHESH SIRI</div>
+            </div>
+
+            <canvas class="visualizer-canvas" id="visualizerCanvas"></canvas>
+
+            <div class="status-badge" id="statusBadge">
+                <div class="dot" id="statusDot"></div>
+                <span id="statusText">Standing By</span>
+            </div>
+        </div>
+
+        <!-- INPUT BAR -->
+        <div class="input-row">
+            <input type="text" id="commandInput" placeholder="Speak 'Hey Mahesh' or type: 'battery status', 'open vs code'..." autofocus onkeypress="if(event.key==='Enter') executeText()">
+            <button class="btn-action" onclick="executeText()">Run</button>
+        </div>
+
+        <!-- QUICK CHIPS -->
+        <div class="chips-row">
+            <div class="chip" onclick="quickRun('battery status')">🔋 Battery Stats</div>
+            <div class="chip" onclick="quickRun('open vs code')">💻 Open VS Code</div>
+            <div class="chip" onclick="quickRun('explain this slide')">📸 Explain Screen</div>
+            <div class="chip" onclick="quickRun('search youtube lofi study beats')">🎵 Lofi Music</div>
+            <div class="chip" onclick="quickRun('draft an email to professor')">✍️ Draft Email</div>
+            <div class="chip" onclick="quickRun('mute volume')">🔇 Mute Volume</div>
+        </div>
+
+        <!-- RESPONSE -->
+        <div class="response-card" id="responseCard">
+            <span>⚡ Mahesh:</span> Say 'Hey Mahesh' or type any command to control your laptop!
+        </div>
+    </div>
+
+    <script>
+        let isRecording = false;
+        let recognition = null;
+        let audioCtx = null;
+        let analyser = null;
+        let animId = null;
+
+        // Initialize Web Speech Recognition
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.interimResults = false;
+            recognition.lang = 'en-US';
+
+            recognition.onresult = (event) => {
+                const transcript = event.results[event.results.length - 1][0].transcript.trim();
+                console.log("Heard:", transcript);
+                document.getElementById('commandInput').value = transcript;
+                executeCommand(transcript);
+            };
+
+            recognition.onerror = (e) => {
+                console.warn("Speech error:", e);
+            };
+        }
+
+        // Initialize Live Audio Waveform Visualizer
+        async function setupAudioVisualizer() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const source = audioCtx.createMediaStreamSource(stream);
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 32;
+                source.connect(analyser);
+
+                drawVisualizer();
+
+                // Auto-start continuous speech recognition
+                if (recognition) {
+                    try { recognition.start(); } catch(e){}
+                    setStatus("Voice Active", "var(--green)");
+                }
+            } catch (err) {
+                console.log("Mic access info:", err);
+                setStatus("Keyboard Ready", "var(--cyan)");
+            }
+        }
+
+        function drawVisualizer() {
+            const canvas = document.getElementById('visualizerCanvas');
+            const ctx = canvas.getContext('2d');
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+            function render() {
+                animId = requestAnimationFrame(render);
+                analyser.getByteFrequencyData(dataArray);
+
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const barWidth = 6;
+                let x = 10;
+
+                for (let i = 0; i < 8; i++) {
+                    const barHeight = Math.max(3, (dataArray[i] / 255) * 18);
+                    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                    grad.addColorStop(0, '#00E5FF');
+                    grad.addColorStop(1, '#8B5CF6');
+
+                    ctx.fillStyle = grad;
+                    ctx.beginPath();
+                    ctx.roundRect(x, (canvas.height - barHeight) / 2, barWidth, barHeight, 3);
+                    ctx.fill();
+
+                    x += barWidth + 6;
+                }
+            }
+            render();
+        }
+
+        function setStatus(text, color) {
+            document.getElementById('statusText').innerText = text;
+            document.getElementById('statusText').style.color = color;
+            document.getElementById('statusDot').style.background = color;
+            document.getElementById('statusDot').style.boxShadow = `0 0 8px ${color}`;
+        }
+
+        function quickRun(cmd) {
+            document.getElementById('commandInput').value = cmd;
+            executeCommand(cmd);
+        }
+
+        function executeText() {
+            const input = document.getElementById('commandInput');
+            const query = input.value.trim();
+            if (!query) return;
+            executeCommand(query);
+            input.value = "";
+        }
+
+        async function executeCommand(query) {
+            const island = document.getElementById('siriIsland');
+            const responseCard = document.getElementById('responseCard');
+
+            island.classList.add('active');
+            setStatus("Executing...", "var(--purple)");
+            responseCard.innerHTML = `<span>⏳ Running:</span> "${query}"...`;
+
+            try {
+                const res = await fetch('http://127.0.0.1:5500/api/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: query })
+                });
+                const data = await res.json();
+                responseCard.innerHTML = `<span>⚡ Mahesh:</span> ${data.message}`;
+                setStatus("Done!", "var(--green)");
+
+                // Voice feedback via SpeechSynthesis
+                if ('speechSynthesis' in window) {
+                    const utter = new SpeechSynthesisUtterance(data.message);
+                    utter.rate = 1.15;
+                    window.speechSynthesis.speak(utter);
+                }
+            } catch (err) {
+                responseCard.innerHTML = `<span style="color:var(--red)">❌</span> Error connecting to desktop engine.`;
+                setStatus("Offline", "var(--red)");
+            }
+
+            setTimeout(() => {
+                island.classList.remove('active');
+                setStatus("Voice Active", "var(--green)");
+            }, 3500);
+        }
+
+        function toggleVoice() {
+            const orb = document.getElementById('orbBtn');
+            if (!isRecording) {
+                isRecording = true;
+                orb.classList.add('recording');
+                setupAudioVisualizer();
+            } else {
+                isRecording = false;
+                orb.classList.remove('recording');
+                if (recognition) recognition.stop();
+                setStatus("Standing By", "var(--cyan)");
+            }
+        }
+
+        // Start on load
+        window.addEventListener('load', () => {
+            setupAudioVisualizer();
+        });
+    </script>
+</body>
+</html>
