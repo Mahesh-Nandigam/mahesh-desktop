@@ -1,14 +1,14 @@
 """
-⚡ MAHESH SIRI FOR WINDOWS
+⚡ MAHESH SIRI FOR WINDOWS - PRODUCTION ENGINE
 -------------------------------------------------------------------------
 The Ultimate Apple-style Sovereign Voice & Screen AI Assistant for Windows.
-- Runs 100% silently in the background with ZERO screen clutter.
-- Continuous Wake Word listener: "Hey Mahesh", "Mahesh", "Hey Siri", "Hi Mahesh".
+- Runs 100% silently in the background (Zero Screen Clutter).
+- Continuous Low-Latency VAD Wake Word listener ("Hey Mahesh", "Mahesh", "Hey Siri").
 - Global Hotkeys: [Alt + M] to summon, [Alt + S] to analyze screen, [Escape] to dismiss.
-- Real-time Floating Dynamic Island HUD with audio pulse visualizer.
+- Real-time Floating Dynamic Island HUD with audio pulse level visualizer.
 - Instant OS Automations (Apps, Screen Vision, Auto-typing, Battery, Volume, Search).
 - Voice response via pyttsx3 + Apple Siri Chime sound.
-- System Tray resident icon.
+- Windows System Tray resident icon.
 -------------------------------------------------------------------------
 """
 
@@ -16,10 +16,12 @@ import os
 import sys
 import time
 import queue
+import collections
 import threading
 import winsound
 import re
-import datetime
+import numpy as np
+import sounddevice as sd
 import speech_recognition as sr
 import pyttsx3
 import customtkinter as ctk
@@ -27,11 +29,11 @@ from PIL import Image, ImageDraw
 import pystray
 from pynput import keyboard
 
-# Ensure UTF-8 output encoding for Windows consoles
+# Ensure UTF-8 output encoding for Windows console without crashing
 if sys.platform == "win32":
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding='utf-8', errors='ignore')
+        sys.stderr.reconfigure(encoding='utf-8', errors='ignore')
     except Exception:
         pass
 
@@ -42,6 +44,11 @@ from core.automations import DesktopAutomations
 from core.reasoning import DesktopReasoningEngine
 
 ctk.set_appearance_mode("dark")
+
+SAMPLE_RATE = 16000
+BLOCK_SIZE = 1600  # 100ms chunks
+SILENCE_CHUNKS_THRESHOLD = 5  # 500ms silence completes phrase
+TRIGGER_RMS_THRESHOLD = 0.0065  # Sensitive speech detection
 
 WAKE_WORDS = [
     "hey mahesh", "mahesh", "hey siri", "siri",
@@ -55,10 +62,6 @@ class MaheshSiriApp(ctk.CTk):
         self.automations = DesktopAutomations()
         self.reasoning = DesktopReasoningEngine(self.automations)
         self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = 280
-        self.recognizer.dynamic_energy_threshold = True
-        self.recognizer.pause_threshold = 0.6
-        self.recognizer.non_speaking_duration = 0.4
 
         # Window Styling (Apple Dynamic Island)
         self.title("Mahesh Siri")
@@ -76,17 +79,20 @@ class MaheshSiriApp(ctk.CTk):
         self.position_island()
         self.setup_ui()
         
-        # Hide window by default (Invisible background daemon until triggered)
+        # Hide window by default (Invisible background daemon until summoned)
         self.withdraw()
 
-        # Initialize TTS in background worker
+        # Audio Queue & VAD Stream state
+        self.audio_queue = queue.Queue()
         self.tts_queue = queue.Queue()
+        
+        # Start TTS Thread
         threading.Thread(target=self._tts_worker, daemon=True).start()
 
-        # Setup System Tray & Global Hotkeys & Wake-word Listener
+        # Setup System Tray & Global Hotkeys & VAD Stream
         self.setup_hotkeys()
         self.setup_system_tray()
-        threading.Thread(target=self._background_wake_word_loop, daemon=True).start()
+        threading.Thread(target=self._vad_stream_worker, daemon=True).start()
 
     def position_island(self):
         screen_w = self.winfo_screenwidth()
@@ -141,7 +147,7 @@ class MaheshSiriApp(ctk.CTk):
         # Hotkey hints
         self.hint_label = ctk.CTkLabel(
             self.header_row,
-            text="Alt+M: Summon | Alt+S: Screen Eye | Esc: Hide",
+            text="Alt+M: Summon | Alt+S: Eye | Esc: Hide",
             font=ctk.CTkFont(size=10),
             text_color="#64748B"
         )
@@ -169,7 +175,7 @@ class MaheshSiriApp(ctk.CTk):
         # Unified Input Bar
         self.input_field = ctk.CTkEntry(
             self.action_row,
-            placeholder_text="Listening... or type ('battery', 'open vs code', 'explain slide')...",
+            placeholder_text="Speak or type command (e.g. 'battery', 'open vs code', 'explain slide')...",
             font=ctk.CTkFont(family="Plus Jakarta Sans", size=13),
             fg_color="#121520",
             border_color="#1F293D",
@@ -246,7 +252,6 @@ class MaheshSiriApp(ctk.CTk):
     def manual_mic_trigger(self):
         """Triggered via Mic Button or Alt+M."""
         self.show_island(status="● Listening to you...", color="#00E5FF")
-        threading.Thread(target=self._capture_active_speech, daemon=True).start()
 
     def on_text_submit(self):
         query = self.input_field.get().strip()
@@ -288,7 +293,6 @@ class MaheshSiriApp(ctk.CTk):
 
     def speak(self, text: str):
         """Queues voice response without blocking UI."""
-        # Strip emojis and markdown symbols for clean speech
         clean_speech = re.sub(r'[^\w\s.,!?-]', '', text).strip()
         if clean_speech:
             self.tts_queue.put(clean_speech)
@@ -299,97 +303,105 @@ class MaheshSiriApp(ctk.CTk):
             try:
                 engine = pyttsx3.init()
                 engine.setProperty('rate', 185)
-                # Select a modern voice if available
                 voices = engine.getProperty('voices')
                 if len(voices) > 1:
-                    engine.setProperty('voice', voices[1].id) # Often female / smooth voice on Windows
+                    engine.setProperty('voice', voices[1].id)
                 engine.say(text)
                 engine.runAndWait()
             except Exception as e:
-                print(f"[TTS Error]: {e}")
+                print(f"[TTS Error]: {e}", flush=True)
             finally:
                 self.tts_queue.task_done()
 
-    def _capture_active_speech(self):
-        """Records a single command when summoned."""
+    def _vad_stream_worker(self):
+        """Continuous low-latency streaming VAD with pre-roll circular buffer."""
+        def audio_cb(indata, frames, time_info, status):
+            self.audio_queue.put(indata.copy())
+
+        ring_buffer = collections.deque(maxlen=10) # 1.0s pre-roll buffer
+        is_speaking = False
+        phrase_chunks = []
+        silent_count = 0
+
+        print("[Mahesh Siri] 🎧 High-Speed VAD Audio Stream Initialized.", flush=True)
+
         try:
-            with sr.Microphone() as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.4)
-                audio = self.recognizer.listen(source, timeout=4.0, phrase_time_limit=6.0)
-                transcript = self.recognizer.recognize_google(audio)
-                self.after(0, lambda: self.input_field.delete(0, "end"))
-                self.after(0, lambda: self.input_field.insert(0, transcript))
-                self.after(0, lambda: self.execute_command(transcript))
-        except sr.WaitTimeoutError:
-            self.after(0, lambda: self.status_label.configure(text="● Timed out", text_color="#EF4444"))
-            self.schedule_auto_hide(2.0)
-        except sr.UnknownValueError:
-            self.after(0, lambda: self.status_label.configure(text="● Couldn't hear clearly", text_color="#F59E0B"))
-            self.schedule_auto_hide(2.0)
+            with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, blocksize=BLOCK_SIZE, callback=audio_cb):
+                while True:
+                    if not self.voice_enabled or self.is_busy:
+                        time.sleep(0.1)
+                        continue
+
+                    try:
+                        chunk = self.audio_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+
+                    rms = float(np.sqrt(np.mean(chunk**2)))
+
+                    # Update visualizer level bar in real-time
+                    if self.is_visible:
+                        level = min(1.0, rms * 50)
+                        self.after(0, lambda l=level: self.level_bar.set(l))
+
+                    if not is_speaking:
+                        ring_buffer.append(chunk)
+                        if rms > TRIGGER_RMS_THRESHOLD:
+                            is_speaking = True
+                            phrase_chunks = list(ring_buffer)
+                            silent_count = 0
+                    else:
+                        phrase_chunks.append(chunk)
+                        if rms < TRIGGER_RMS_THRESHOLD:
+                            silent_count += 1
+                            if silent_count >= SILENCE_CHUNKS_THRESHOLD:
+                                # Phrase completed
+                                is_speaking = False
+                                silent_count = 0
+
+                                if len(phrase_chunks) >= 4:
+                                    full_audio = np.concatenate(phrase_chunks, axis=0)
+                                    audio_int16 = (full_audio * 32767).astype(np.int16)
+                                    audio_data = sr.AudioData(audio_int16.tobytes(), SAMPLE_RATE, 2)
+                                    threading.Thread(target=self._process_speech_snippet, args=(audio_data,), daemon=True).start()
+
+                                phrase_chunks = []
+                                ring_buffer.clear()
+                        else:
+                            silent_count = 0
+
         except Exception as e:
-            print(f"[Speech Error] {e}")
-            self.schedule_auto_hide(1.5)
+            print(f"[VAD Fatal Error]: {e}", flush=True)
 
-    def _background_wake_word_loop(self):
-        """Continuous background listener that detects 'Hey Mahesh' or 'Hey Siri'."""
-        print("[Mahesh Siri] 🎧 Background Wake Word listener started (Watching for 'Hey Mahesh')...")
-        
-        while True:
-            if not self.voice_enabled or self.is_busy:
-                time.sleep(0.5)
-                continue
+    def _process_speech_snippet(self, audio_data):
+        """Transcribes speech and routes wake-word or active command."""
+        try:
+            text = self.recognizer.recognize_google(audio_data).lower().strip()
+            print(f"[Heard Speech]: '{text}'", flush=True)
 
-            try:
-                with sr.Microphone() as source:
-                    # Dynamic noise calibration
-                    self.recognizer.adjust_for_ambient_noise(source, duration=0.6)
-                    
-                    while self.voice_enabled and not self.is_busy:
-                        try:
-                            # Listen for phrase
-                            audio = self.recognizer.listen(source, timeout=3.0, phrase_time_limit=6.0)
-                            
-                            try:
-                                text = self.recognizer.recognize_google(audio).lower().strip()
-                                print(f"[Heard in background]: '{text}'")
+            wake_detected = any(w in text for w in WAKE_WORDS)
 
-                                # Check for wake words
-                                wake_detected = any(w in text for w in WAKE_WORDS)
+            if wake_detected or self.is_visible:
+                # Extract command part
+                command_part = text
+                for w in WAKE_WORDS:
+                    command_part = re.sub(rf'^{w}[,\s]*', '', command_part, flags=re.IGNORECASE).strip()
 
-                                if wake_detected:
-                                    print(f"⚡ WAKE WORD ACTIVATED: '{text}'")
-                                    
-                                    # Extract any command spoken in the same breath
-                                    command_part = text
-                                    for w in WAKE_WORDS:
-                                        command_part = re.sub(rf'^{w}[,\s]*', '', command_part, flags=re.IGNORECASE).strip()
+                if command_part and len(command_part) > 2:
+                    # Combined command (e.g. "Hey Mahesh open vs code")
+                    self.after(0, lambda t=text: self.show_island(initial_text=t, status="⚡ Executing...", color="#8B5CF6"))
+                    self.after(0, lambda c=command_part: self.execute_command(c))
+                else:
+                    # Standalone wake word ("Hey Mahesh")
+                    self.after(0, lambda: self.show_island(status="● Listening...", color="#00E5FF"))
 
-                                    if command_part and len(command_part) > 2:
-                                        # Immediate execution of combined command (e.g. "Hey Mahesh open vs code")
-                                        self.after(0, lambda t=text: self.show_island(initial_text=t, status="⚡ Executing...", color="#8B5CF6"))
-                                        self.after(0, lambda c=command_part: self.execute_command(c))
-                                    else:
-                                        # Standalone wake word ("Hey Mahesh") -> summon and listen for follow-up
-                                        self.after(0, lambda: self.show_island(status="● Listening...", color="#00E5FF"))
-                                        threading.Thread(target=self._capture_active_speech, daemon=True).start()
-
-                                    time.sleep(1.0)
-
-                            except sr.UnknownValueError:
-                                pass # Normal ambient background sound
-                            except sr.RequestError as e:
-                                print(f"[Google STT Network Error]: {e}")
-                                time.sleep(1.0)
-
-                        except sr.WaitTimeoutError:
-                            continue # Loop back smoothly
-
-            except Exception as e:
-                print(f"[Mic Loop Error]: {e}")
-                time.sleep(2.0)
+        except sr.UnknownValueError:
+            pass # Ambient noise
+        except Exception as e:
+            print(f"[STT Error]: {e}", flush=True)
 
     def setup_hotkeys(self):
-        """Global system-wide hotkeys that work from any Windows app."""
+        """Global system-wide hotkeys."""
         def _on_summon():
             self.after(0, self.manual_mic_trigger)
 
@@ -409,14 +421,13 @@ class MaheshSiriApp(ctk.CTk):
             })
             hotkeys.daemon = True
             hotkeys.start()
-            print("[Mahesh Siri] ⌨️ Global Hotkeys Registered: Alt+M (Summon), Alt+S (Screen Eye), Esc (Hide)")
+            print("[Mahesh Siri] ⌨️ Global Hotkeys Registered: Alt+M (Summon), Alt+S (Screen Eye), Esc (Hide)", flush=True)
         except Exception as e:
-            print(f"[Hotkey Setup Error]: {e}")
+            print(f"[Hotkey Setup Error]: {e}", flush=True)
 
     def setup_system_tray(self):
-        """Creates a sleek Windows system tray icon."""
+        """Creates Windows system tray icon."""
         def _create_image():
-            # Generate a 64x64 neon cyber orb icon
             image = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
             draw = ImageDraw.Draw(image)
             draw.ellipse((4, 4, 60, 60), fill="#0A0B10", outline="#00E5FF", width=4)
@@ -432,7 +443,7 @@ class MaheshSiriApp(ctk.CTk):
         def _toggle_voice(icon, item):
             self.voice_enabled = not self.voice_enabled
             state = "Enabled" if self.voice_enabled else "Muted"
-            print(f"[Mahesh Siri] Voice trigger {state}")
+            print(f"[Mahesh Siri] Voice trigger {state}", flush=True)
 
         def _on_exit(icon, item):
             icon.stop()
@@ -451,15 +462,13 @@ class MaheshSiriApp(ctk.CTk):
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
 
 def main():
-    print("==================================================")
-    print("⚡ MAHESH SIRI FOR WINDOWS - STARTING ENGINE")
-    print("==================================================")
-    print("● Status: Invisible Background Daemon Active")
-    print("● Wake Word: Say 'Hey Mahesh' or 'Hey Siri'")
-    print("● Global Hotkey: Press [Alt + M] to summon instantly")
-    print("● Screen Eye: Press [Alt + S] to analyze screen/slide")
-    print("● Dismiss: Press [Escape] or wait 3.5s to auto-hide")
-    print("==================================================")
+    print("==================================================", flush=True)
+    print("⚡ MAHESH SIRI FOR WINDOWS - LIVE ENGINE ACTIVE", flush=True)
+    print("==================================================", flush=True)
+    print("● Mode: 100% Invisible Background Resident", flush=True)
+    print("● Wake Words: Say 'Hey Mahesh' or 'Hey Siri'", flush=True)
+    print("● Global Hotkeys: [Alt + M] to summon, [Alt + S] for Screen Eye", flush=True)
+    print("==================================================", flush=True)
 
     app = MaheshSiriApp()
     app.mainloop()
